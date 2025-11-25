@@ -50,12 +50,24 @@ export class ExcelService {
         
         // Check if Brandlink exists in column N
         const brandlinkCell = row.getCell(COLUMN_MAPPING.BRANDLINK);
-        const brandlink = brandlinkCell.value ? String(brandlinkCell.value).trim() : '';
+        let brandlink = '';
+        
+        if (brandlinkCell.value) {
+          // Handle hyperlink cells (ExcelJS stores as object with text/hyperlink properties)
+          if (typeof brandlinkCell.value === 'object' && 'hyperlink' in brandlinkCell.value) {
+            brandlink = String(brandlinkCell.value.hyperlink).trim();
+          } else if (typeof brandlinkCell.value === 'object' && 'text' in brandlinkCell.value) {
+            brandlink = String(brandlinkCell.value.text).trim();
+          } else {
+            // Plain text or other types
+            brandlink = String(brandlinkCell.value).trim();
+          }
+        }
         
         // If brandlink exists, append it to input data
         if (brandlink) {
           inputData += `\n\nBrandlink: ${brandlink}`;
-          console.log(`Row ${rowNumber}: Added Brandlink to input data`);
+          console.log(`Row ${rowNumber}: Added Brandlink to input data: ${brandlink}`);
         }
         
         rows.push({
