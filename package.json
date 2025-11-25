@@ -1,0 +1,38 @@
+{
+  "name": "enhanceunits",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon --watch backend/src --exec ts-node -r tsconfig-paths/register --project backend/tsconfig.json backend/src/server.ts",
+    "dev:backend": "nodemon --watch backend/src --exec ts-node -r tsconfig-paths/register --project backend/tsconfig.json backend/src/server.ts",
+    "dev:extension": "cd extension && npm run build -- --watch",
+    "dev:all": "npm run dev:backend & npm run dev:extension",
+    "build:extension": "cd extension && npm install && npm run build",
+    "kill:all": "pkill -f 'nodemon|vite' || true"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "async-mutex": "^0.5.0",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "multer": "^2.0.2",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "nodemon": "^3.1.11",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.9.3"
+  }
+}

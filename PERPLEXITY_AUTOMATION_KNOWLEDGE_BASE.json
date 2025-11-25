@@ -1,0 +1,442 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2025-11-18",
+  "purpose": "Complete reference for Perplexity.ai DOM structure, automation workflow, and Excel integration",
+  
+  "domStructure": {
+    "inputField": {
+      "selector": "#ask-input",
+      "type": "div",
+      "attributes": {
+        "contenteditable": "true",
+        "data-lexical-editor": "true",
+        "role": "textbox"
+      },
+      "interaction": {
+        "method": "textContent",
+        "event": "InputEvent",
+        "eventType": "input",
+        "eventOptions": {
+          "bubbles": true,
+          "cancelable": false,
+          "inputType": "insertText"
+        }
+      },
+      "waitStrategy": "querySelector('#ask-input')"
+    },
+    
+    "submitButton": {
+      "selectors": [
+        {
+          "priority": 1,
+          "selector": "button[aria-label=\"Submit\"]",
+          "name": "aria-submit"
+        },
+        {
+          "priority": 2,
+          "selector": "button[data-testid=\"submit-button\"]",
+          "name": "submit-button"
+        },
+        {
+          "priority": 3,
+          "selector": "button[type=\"submit\"]",
+          "name": "type-submit"
+        },
+        {
+          "priority": 4,
+          "selector": "form button[type=\"button\"]",
+          "name": "form-button"
+        },
+        {
+          "priority": 5,
+          "selector": "button:has(svg)",
+          "name": "svg-button"
+        },
+        {
+          "priority": 6,
+          "selector": "button[aria-label*=\"ubmit\"]",
+          "name": "aria-contains-submit"
+        },
+        {
+          "priority": 7,
+          "selector": "button.submit",
+          "name": "class-submit"
+        }
+      ],
+      "states": {
+        "READY": "Button enabled, ready to submit",
+        "THINKING": "Button disabled (disabled attribute or aria-disabled=true)",
+        "NOT_FOUND": "Button not found in DOM"
+      },
+      "stateDetection": {
+        "method": "hasAttribute('disabled') || getAttribute('aria-disabled') === 'true'"
+      },
+      "interaction": {
+        "steps": [
+          "scrollIntoView({ behavior: 'instant', block: 'center' })",
+          "focus()",
+          "click()",
+          "dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))",
+          "dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))"
+        ]
+      }
+    },
+    
+    "stopGeneratingButton": {
+      "selector": "button[data-testid=\"stop-generating-response-button\"]",
+      "purpose": "Indicates AI is currently generating response",
+      "stateDetection": {
+        "isThinking": "button exists && visible && !disabled",
+        "checkVisible": "button.offsetParent !== null",
+        "checkDisabled": "button.hasAttribute('disabled')"
+      },
+      "waitStrategy": {
+        "method": "poll",
+        "interval": 500,
+        "condition": "!isThinking",
+        "timeout": 1800000
+      }
+    },
+    
+    "newThreadButton": {
+      "xpath": "(//button[@data-testid=\"sidebar-new-thread\"])[1]",
+      "cssSelector": "button[data-testid=\"sidebar-new-thread\"]",
+      "note": "Multiple buttons may exist, use XPath to select FIRST one",
+      "validation": {
+        "checkVisible": "button.offsetParent !== null",
+        "checkDisabled": "!button.hasAttribute('disabled')"
+      },
+      "interaction": {
+        "method": "document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.click()"
+      }
+    },
+    
+    "markdownContent": {
+      "selectorPattern": "#markdown-content-{N}",
+      "counterStart": 0,
+      "counterResetAfterNewThread": 1,
+      "structure": {
+        "container": "div#markdown-content-{N}",
+        "codeBlock": "pre > code"
+      },
+      "extraction": {
+        "steps": [
+          "Find markdown container by ID",
+          "Find code element inside",
+          "Extract textContent",
+          "Parse JSON"
+        ]
+      },
+      "counterManagement": {
+        "firstThread": "Start at 0, increment after each query",
+        "afterNewThread": "Reset to 1 (initial prompt response is at index 1)"
+      }
+    }
+  },
+  
+  "automationWorkflow": {
+    "steps": [
+      {
+        "step": 1,
+        "action": "Load Excel File",
+        "method": "fetch(chrome.runtime.getURL(filePath))"
+      },
+      {
+        "step": 2,
+        "action": "Parse Excel (find REVIEW rows)",
+        "method": "XLSX.read(arrayBuffer, { type: 'array' })"
+      },
+      {
+        "step": 3,
+        "action": "Open Perplexity Tab",
+        "method": "chrome.tabs.create({ url: 'https://www.perplexity.ai/' })"
+      },
+      {
+        "step": 4,
+        "action": "Wait for page load",
+        "delay": 2000
+      },
+      {
+        "step": 5,
+        "action": "Send Full Prompt + Ingredient #1",
+        "format": "{FULL_PROMPT}\\n\\n{INGREDIENT_NAME}"
+      },
+      {
+        "step": 6,
+        "action": "Click Submit",
+        "method": "button.click()"
+      },
+      {
+        "step": 7,
+        "action": "Wait for AI to finish thinking",
+        "method": "Poll stop button state"
+      },
+      {
+        "step": 8,
+        "action": "Extract markdown-content-{N}",
+        "selector": "#markdown-content-{counter}"
+      },
+      {
+        "step": 9,
+        "action": "Parse JSON tags",
+        "method": "JSON.parse(codeElement.textContent)"
+      },
+      {
+        "step": 10,
+        "action": "Write tags to Excel",
+        "columns": "F-N"
+      },
+      {
+        "step": 11,
+        "action": "Update status to OK",
+        "column": "C"
+      },
+      {
+        "step": 12,
+        "action": "Send Ingredient #2 (no prompt)",
+        "format": "{INGREDIENT_NAME}"
+      },
+      {
+        "step": 13,
+        "action": "Repeat steps 6-11 for rows 2-50"
+      },
+      {
+        "step": 14,
+        "action": "Click New Thread (row 51)",
+        "xpath": "(//button[@data-testid=\"sidebar-new-thread\"])[1]"
+      },
+      {
+        "step": 15,
+        "action": "Send Full Prompt again",
+        "delay": 10000
+      },
+      {
+        "step": 16,
+        "action": "Continue until all rows processed"
+      },
+      {
+        "step": 17,
+        "action": "Download processed Excel file",
+        "method": "XLSX.write() + Blob + URL.createObjectURL()"
+      },
+      {
+        "step": 18,
+        "action": "Load next Excel file (Part 2)"
+      },
+      {
+        "step": 19,
+        "action": "Repeat until all 12 files done"
+      }
+    ],
+    
+    "threadManagement": {
+      "thread1": {
+        "row1": "Send full prompt + ingredient",
+        "rows2to50": "Send ingredient only",
+        "markdownCounter": "0, 1, 2, ..., 49"
+      },
+      "thread2": {
+        "initialization": "Send full prompt (no ingredient), wait 10s",
+        "row51": "Send ingredient only",
+        "rows52to100": "Send ingredient only",
+        "markdownCounter": "1, 2, 3, ..., 50",
+        "note": "Counter resets to 1 (not 0) after new thread"
+      }
+    },
+    
+    "promptFormat": {
+      "firstRowInThread": "{FULL_PROMPT_CONTENT}\\n\\n{INGREDIENT_NAME}",
+      "subsequentRows": "{INGREDIENT_NAME}"
+    }
+  },
+  
+  "excelIntegration": {
+    "fileStructure": {
+      "columns": {
+        "A": "_id (MongoDB ID)",
+        "B": "Status From BA",
+        "C": "Status (REVIEW, OK, NOT-OK)",
+        "D": "Ingredient Name",
+        "E": "Skip",
+        "F": "Wheat",
+        "G": "Gluten-Free Grains",
+        "H": "Dairy",
+        "I": "Tree Nuts",
+        "J": "Peanuts",
+        "K": "Nightshades",
+        "L": "Alliums",
+        "M": "Dried Herbs & Spices",
+        "N": "Spicy"
+      }
+    },
+    
+    "loading": {
+      "fromExtension": {
+        "method": "fetch(chrome.runtime.getURL(filePath))",
+        "parse": "XLSX.read(arrayBuffer, { type: 'array' })"
+      },
+      "fromUserUpload": {
+        "method": "file.arrayBuffer()",
+        "parse": "XLSX.read(arrayBuffer, { type: 'array' })"
+      }
+    },
+    
+    "statusPatterns": {
+      "REVIEW": "/^review$/i",
+      "NOT_OK": "/^not[-\\s]?ok[e]?$/i"
+    },
+    
+    "tagMapping": {
+      "Wheat": "F",
+      "Gluten-Free Grains": "G",
+      "Dairy": "H",
+      "Tree Nuts": "I",
+      "Peanuts": "J",
+      "Nightshades": "K",
+      "Alliums": "L",
+      "Dried Herbs & Spices": "M",
+      "Spicy": "N"
+    },
+    
+    "writingTags": {
+      "method": "worksheet[`${column}${rowNum}`] = { t: 's', v: 'x' }"
+    },
+    
+    "updatingStatus": {
+      "method": "worksheet[`C${rowNum}`] = { t: 's', v: 'OK', s: { fill: { fgColor: { rgb: 'C6EFCE' } } } }"
+    },
+    
+    "downloading": {
+      "steps": [
+        "XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })",
+        "new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })",
+        "URL.createObjectURL(blob)",
+        "a.download = filename",
+        "a.click()",
+        "URL.revokeObjectURL(url)"
+      ]
+    }
+  },
+  
+  "timing": {
+    "delays": {
+      "DELAY_VERY_SHORT": 50,
+      "DELAY_SHORT": 100,
+      "DELAY_MEDIUM": 200,
+      "DELAY_STANDARD": 500,
+      "DELAY_BETWEEN_ROWS": 2000,
+      "DELAY_AFTER_SUBMIT": 500,
+      "DELAY_PAGE_LOAD": 2000,
+      "DELAY_INITIAL_PROMPT": 10000,
+      "DELAY_AI_START": 5000
+    },
+    "polling": {
+      "POLL_INTERVAL_FAST": 100,
+      "POLL_INTERVAL_STANDARD": 500,
+      "POLL_INTERVAL_SLOW": 2000
+    },
+    "timeouts": {
+      "TIMEOUT_ELEMENT_WAIT": 30000,
+      "TIMEOUT_BUTTON_STATE": 60000,
+      "TIMEOUT_MARKDOWN_WAIT": 60000,
+      "TIMEOUT_AI_THINKING": 1800000
+    }
+  },
+  
+  "messagePassing": {
+    "types": [
+      "START_WORKFLOW",
+      "WORKFLOW_STATUS",
+      "OPEN_OR_SWITCH_TAB",
+      "GET_MARKDOWN",
+      "NEW_THREAD",
+      "CREATE_THREAD",
+      "START_PROCESSING",
+      "STOP_PROCESSING",
+      "DOWNLOAD_CURRENT"
+    ],
+    "flow": {
+      "popupToBackground": "chrome.runtime.sendMessage({ type, payload })",
+      "backgroundToContent": "chrome.tabs.sendMessage(tabId, { type, payload })",
+      "contentToBackground": "sendResponse({ success, results })"
+    }
+  },
+  
+  "storage": {
+    "keys": {
+      "IS_PROCESSING": "isProcessing",
+      "PROMPT_SENT": "promptSent",
+      "CURRENT_PART": "currentPart",
+      "PROCESSING_STATE": "processingState",
+      "EXCEL_BUFFER_PREFIX": "excel_buffer_"
+    },
+    "methods": {
+      "save": "chrome.storage.local.set({ key: value })",
+      "load": "chrome.storage.local.get(['key'])"
+    }
+  },
+  
+  "errorHandling": {
+    "commonErrors": [
+      {
+        "error": "Input Not Found",
+        "message": "Input element #ask-input not found",
+        "solution": "Wait for page load, check if Perplexity UI changed"
+      },
+      {
+        "error": "Button Not Found",
+        "message": "Submit button not found",
+        "solution": "Try fallback selectors, check if UI changed"
+      },
+      {
+        "error": "AI Timeout",
+        "message": "AI did not respond within timeout",
+        "solution": "Increase timeout, check if AI is stuck"
+      },
+      {
+        "error": "Invalid JSON Response",
+        "message": "Response does not contain valid JSON",
+        "solution": "Check AI response format, verify prompt instructions"
+      }
+    ],
+    "retryLogic": {
+      "maxRetries": 3,
+      "backoff": "exponential",
+      "initialDelay": 1000,
+      "multiplier": 2
+    }
+  },
+  
+  "troubleshooting": {
+    "debugChecklist": [
+      "Check if Perplexity tab is open",
+      "Check if input element exists (#ask-input)",
+      "Check if submit button exists",
+      "Check if prompt was set correctly (verify length)",
+      "Check if AI is thinking (stop button state)",
+      "Check markdown counter (correct index)",
+      "Check if markdown element exists",
+      "Check if code element exists inside markdown",
+      "Check if JSON is valid"
+    ],
+    "commonIssues": [
+      {
+        "issue": "Prompt not set in input",
+        "solution": "Check if Lexical editor loaded, use textContent instead of value"
+      },
+      {
+        "issue": "Button click doesn't work",
+        "solution": "Scroll into view first, add mouse events"
+      },
+      {
+        "issue": "Markdown content not found",
+        "solution": "Check counter value, wait longer for AI response"
+      },
+      {
+        "issue": "JSON parse error",
+        "solution": "Check if AI returned valid JSON, extract from code block"
+      }
+    ]
+  }
+}
+
