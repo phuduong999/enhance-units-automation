@@ -1,0 +1,30 @@
+# Node modules
+node_modules
+**/node_modules
+
+# Git
+.git
+.gitignore
+
+# Extension files (not needed for backend)
+extension/dist
+extension/node_modules
+
+# Build artifacts
+backend/dist
+*.log
+
+# IDE
+.vscode
+.idea
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+
+# Uploads (will be mounted as volume)
+uploads/*

@@ -21,7 +21,7 @@ export class QueueService {
   private isInitialized: boolean = false;
   private initPrompt: string = '';
   private threadCounter: number = 0; // Track rows in current thread
-  private THREAD_SIZE = 70; // Default: New thread every 70 rows
+  private THREAD_SIZE = 30; // Default: New thread every 30 rows
   private markdownCounter: number = 0; // Track markdown-content-N IDs
   private noMarkdownFailCounter: number = 0; // Track consecutive no-markdown failures
   private MAX_NO_MARKDOWN_FAILS = 10; // Default: Trigger NEW_THREAD after 10 fails
@@ -41,7 +41,7 @@ Step 4: Force the output to be a code block. Do not include explanations or stra
 
   setTestMode(enabled: boolean): void {
     this.testMode = enabled;
-    this.THREAD_SIZE = enabled ? 5 : 70;
+    this.THREAD_SIZE = enabled ? 5 : 30;
     this.MAX_NO_MARKDOWN_FAILS = enabled ? 3 : 10;
     console.log(`🧪 Test mode ${enabled ? 'ENABLED' : 'DISABLED'}`);
     console.log(`   THREAD_SIZE: ${this.THREAD_SIZE}`);

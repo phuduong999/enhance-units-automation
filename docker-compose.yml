@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enhanceunits-backend
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount source code for hot-reload during development
+      - ./backend:/app/backend
+      - ./shared:/app/shared
+      # Mount uploads directory to persist uploaded files
+      - ./uploads:/app/uploads
+      # Exclude node_modules from being overwritten
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    restart: unless-stopped
+    command: npm run dev:backend
+    networks:
+      - enhanceunits-network
+
+networks:
+  enhanceunits-network:
+    driver: bridge

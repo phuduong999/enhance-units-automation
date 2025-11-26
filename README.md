@@ -32,6 +32,25 @@ This will:
 - Build Chrome extension
 
 ### 3. Start Backend
+
+**Option A: Using Docker (Recommended)** ✨
+
+1. Make sure Docker Desktop is running
+2. Build and start the backend:
+   ```bash
+   docker-compose up -d
+   ```
+3. Verify it's running:
+   ```bash
+   docker-compose logs backend
+   ```
+
+The backend will now start automatically whenever Docker Desktop is running!
+
+To stop: `docker-compose down`
+
+**Option B: Traditional Setup**
+
 ```bash
 npm run dev:backend
 ```
@@ -66,7 +85,7 @@ Required columns:
 ## Configuration
 
 ### Production Settings (Default)
-- NEW_THREAD: Every 70 rows
+- NEW_THREAD: Every 30 rows
 - Max Retries: 10 times
 - AI Timeout: 15 minutes
 
