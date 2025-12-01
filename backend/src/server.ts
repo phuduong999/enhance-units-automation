@@ -50,16 +50,17 @@ app.get(API_CONFIG.ENDPOINTS.DOWNLOAD, async (req, res) => {
 
 // New HTTP Polling Endpoints
 app.get(API_CONFIG.ENDPOINTS.NEXT_JOB, async (req, res) => {
-  console.log('GET /api/next-job - Polling for next job');
-  const job = await queueService.getNextJob();
+  const workerId = req.query.workerId as string || 'default';
+  console.log(`GET /api/next-job - Polling for next job (Worker: ${workerId})`);
+  const job = await queueService.getNextJob(workerId);
   res.json({ job });
 });
 
 app.post(API_CONFIG.ENDPOINTS.COMPLETE_JOB, async (req, res) => {
-  const { rowId, result } = req.body;
-  console.log('POST /api/complete-job - Job completed:', rowId);
+  const { rowId, result, workerId } = req.body;
+  console.log(`POST /api/complete-job - Job completed: ${rowId} (Worker: ${workerId || 'default'})`);
   try {
-    await queueService.completeJob(rowId, result);
+    await queueService.completeJob(rowId, result, workerId || 'default');
     res.json({ success: true });
   } catch (error) {
     console.error('Error completing job:', error);
@@ -68,10 +69,10 @@ app.post(API_CONFIG.ENDPOINTS.COMPLETE_JOB, async (req, res) => {
 });
 
 app.post(API_CONFIG.ENDPOINTS.FAIL_JOB, async (req, res) => {
-  const { rowId, error } = req.body;
-  console.log('POST /api/fail-job - Job failed:', rowId, error);
+  const { rowId, error, workerId } = req.body;
+  console.log(`POST /api/fail-job - Job failed: ${rowId} (Worker: ${workerId || 'default'})`, error);
   try {
-    await queueService.failJob(rowId, error);
+    await queueService.failJob(rowId, error, workerId || 'default');
     res.json({ success: true });
   } catch (err) {
     console.error('Error failing job:', err);

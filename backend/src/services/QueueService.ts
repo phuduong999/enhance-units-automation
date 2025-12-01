@@ -6,7 +6,18 @@ import path from 'path';
 
 export class QueueService {
   private queue: RowData[] = [];
-  private processing: Map<number, RowData> = new Map();
+  // Track active jobs by rowId to prevent duplicates
+  private activeJobs: Map<number, RowData> = new Map();
+  
+  // Track state per worker
+  private workerStates: Map<string, {
+    threadCounter: number;
+    markdownCounter: number;
+    noMarkdownFailCounter: number;
+    isInitialized: boolean;
+    activeRowId: number | null;
+  }> = new Map();
+
   private excelService: ExcelService;
   private state: ProcessingState = {
     total: 0,
@@ -18,12 +29,8 @@ export class QueueService {
     activeThreads: 0,
     workflowStep: 'Idle',
   };
-  private isInitialized: boolean = false;
   private initPrompt: string = '';
-  private threadCounter: number = 0; // Track rows in current thread
-  private THREAD_SIZE = 30; // Default: New thread every 30 rows
-  private markdownCounter: number = 0; // Track markdown-content-N IDs
-  private noMarkdownFailCounter: number = 0; // Track consecutive no-markdown failures
+  private THREAD_SIZE = 20; // Default: New thread every 20 rows
   private MAX_NO_MARKDOWN_FAILS = 10; // Default: Trigger NEW_THREAD after 10 fails
   private readonly REMINDER_PROMPT = `Remember the rules 
 Step 4: Force the output to be a code block. Do not include explanations or stranger symbols not relation about result in code block and text. Think silently and just do the job.
@@ -41,11 +48,25 @@ Step 4: Force the output to be a code block. Do not include explanations or stra
 
   setTestMode(enabled: boolean): void {
     this.testMode = enabled;
-    this.THREAD_SIZE = enabled ? 5 : 30;
+    this.THREAD_SIZE = enabled ? 5 : 20;
     this.MAX_NO_MARKDOWN_FAILS = enabled ? 3 : 10;
     console.log(`🧪 Test mode ${enabled ? 'ENABLED' : 'DISABLED'}`);
     console.log(`   THREAD_SIZE: ${this.THREAD_SIZE}`);
     console.log(`   MAX_NO_MARKDOWN_FAILS: ${this.MAX_NO_MARKDOWN_FAILS}`);
+  }
+
+  private getWorkerState(workerId: string) {
+    if (!this.workerStates.has(workerId)) {
+      console.log(`Creating new state for worker: ${workerId}`);
+      this.workerStates.set(workerId, {
+        threadCounter: 0,
+        markdownCounter: 0,
+        noMarkdownFailCounter: 0,
+        isInitialized: false,
+        activeRowId: null
+      });
+    }
+    return this.workerStates.get(workerId)!;
   }
 
   async loadQueue(): Promise<void> {
@@ -57,14 +78,11 @@ Step 4: Force the output to be a code block. Do not include explanations or stra
     this.state.failed = 0;
     this.state.status = 'IDLE';
     this.state.workflowStep = 'Ready to start';
-    this.isInitialized = false;
-    this.threadCounter = 0; // Reset thread counter
-    this.markdownCounter = 0; // Reset markdown counter
-    this.noMarkdownFailCounter = 0; // Reset no-markdown fail counter
     
-    // Clear processing map (important for fresh start)
-    this.processing.clear();
-
+    // Reset all states
+    this.activeJobs.clear();
+    this.workerStates.clear();
+    
     // Read init prompt
     try {
       const promptPath = path.resolve(process.cwd(), 'prompt-force.md');
@@ -78,67 +96,71 @@ Step 4: Force the output to be a code block. Do not include explanations or stra
     console.log(`Queue loaded with ${rows.length} items`);
   }
 
-  async getNextJob(): Promise<JobPayload | null> {
-    console.log('QueueService.getNextJob: isInitialized=', this.isInitialized);
-    console.log('QueueService.getNextJob: queue.length=', this.queue.length);
-    console.log('QueueService.getNextJob: processing.size=', this.processing.size);
-    console.log('QueueService.getNextJob: threadCounter=', this.threadCounter);
-    console.log('QueueService.getNextJob: markdownCounter=', this.markdownCounter);
+  async getNextJob(workerId: string = 'default'): Promise<JobPayload | null> {
+    const workerState = this.getWorkerState(workerId);
+    
+    console.log(`QueueService.getNextJob [${workerId}]: isInitialized=${workerState.isInitialized}`);
+    console.log(`QueueService.getNextJob [${workerId}]: queue.length=${this.queue.length}`);
+    console.log(`QueueService.getNextJob [${workerId}]: activeJobs.size=${this.activeJobs.size}`);
+    console.log(`QueueService.getNextJob [${workerId}]: threadCounter=${workerState.threadCounter}`);
 
-    // CRITICAL: Only allow one job at a time
-    if (this.processing.size > 0) {
-      console.log('QueueService.getNextJob: ⚠️ Already processing a job, returning null');
-      console.log('QueueService.getNextJob: Jobs in processing:', Array.from(this.processing.keys()));
-      return null;
+    // If worker is already processing something, assume it's lost/retry or just ignore?
+    // Ideally, the worker shouldn't ask if it's busy. If it asks, it's free.
+    if (workerState.activeRowId !== null) {
+      console.log(`QueueService.getNextJob [${workerId}]: ⚠️ Worker was marked as busy with row ${workerState.activeRowId}, but asked for job. Resetting active job.`);
+      // If it was a real job, maybe we should re-queue it?
+      // For now, let's just clear it to avoid deadlock.
+      if (workerState.activeRowId > 0) {
+        this.activeJobs.delete(workerState.activeRowId);
+      }
+      workerState.activeRowId = null;
     }
 
     // Check if we need to send INIT prompt first
-    if (!this.isInitialized) {
-      console.log('QueueService.getNextJob: 🔄 NOT INITIALIZED - Returning INIT job');
-      console.log(`QueueService.getNextJob: INIT prompt length= ${this.initPrompt.length}`);
+    if (!workerState.isInitialized) {
+      console.log(`QueueService.getNextJob [${workerId}]: 🔄 NOT INITIALIZED - Returning INIT job`);
       
-      this.processing.set(-1, { rowId: -1, status: 'INIT', inputData: this.initPrompt });
-      this.state.current = -1;
-      this.markdownCounter++; // Increment for INIT response (will be markdown-content-0)
-      
-      console.log(`QueueService.getNextJob: INIT uses markdownCounter= ${this.markdownCounter - 1} (will be markdown-content-${this.markdownCounter - 1})`);
+      workerState.activeRowId = -1;
+      workerState.markdownCounter++; // Increment for INIT response
       
       return {
         rowId: -1,
         inputData: this.initPrompt,
         type: 'INIT',
-        markdownCounter: this.markdownCounter - 1 // Use current value before increment
+        markdownCounter: workerState.markdownCounter - 1
       };
     }
 
     // Check if we need to create a new thread (every THREAD_SIZE rows)
-    if (this.threadCounter > 0 && this.threadCounter % this.THREAD_SIZE === 0) {
-      console.log(`QueueService.getNextJob: 🔄 NEW_THREAD triggered (threadCounter=${this.threadCounter}, THREAD_SIZE=${this.THREAD_SIZE})`);
+    if (workerState.threadCounter > 0 && workerState.threadCounter % this.THREAD_SIZE === 0) {
+      console.log(`QueueService.getNextJob [${workerId}]: 🔄 NEW_THREAD triggered (threadCounter=${workerState.threadCounter})`);
       
-      this.processing.set(-2, { rowId: -2, status: 'NEW_THREAD', inputData: this.initPrompt });
-      this.state.current = -2;
+      workerState.activeRowId = -2;
       
       return {
         rowId: -2,
         inputData: this.initPrompt, // Send INIT prompt after clicking New Thread
         type: 'NEW_THREAD',
-        markdownCounter: 0 // After New Thread, INIT prompt response is markdown-content-0
+        markdownCounter: 0
       };
     }
 
     const job = this.queue.shift();
     if (!job) {
-      console.log('QueueService.getNextJob: Queue is empty, no jobs available');
+      console.log(`QueueService.getNextJob [${workerId}]: Queue is empty`);
       return null;
     }
 
-    this.markdownCounter++; // Increment BEFORE dispatching
-    console.log('QueueService.getNextJob: Returning job', job.rowId, 'with markdownCounter=', this.markdownCounter);
-    this.processing.set(job.rowId, job);
-    this.state.current = job.rowId;
+    workerState.markdownCounter++; // Increment BEFORE dispatching
+    console.log(`QueueService.getNextJob [${workerId}]: Returning job ${job.rowId}`);
+    
+    this.activeJobs.set(job.rowId, job);
+    workerState.activeRowId = job.rowId;
+    
+    this.state.current = job.rowId; // Just for UI (shows last dispatched)
     this.state.status = 'PROCESSING';
-    this.state.activeThreads = this.processing.size;
-    this.state.workflowStep = 'Dispatching Job';
+    this.state.activeThreads = this.activeJobs.size;
+    this.state.workflowStep = `Dispatching Job ${job.rowId} to ${workerId}`;
 
     // Update status in Excel to IN-PROCESS
     this.excelService.updateRowStatus(job.rowId, STATUS.IN_PROCESS);
@@ -146,134 +168,114 @@ Step 4: Force the output to be a code block. Do not include explanations or stra
     return {
       rowId: job.rowId,
       inputData: job.inputData,
-      markdownCounter: this.markdownCounter
+      markdownCounter: workerState.markdownCounter
     };
   }
 
-  async completeJob(rowId: number, result: any): Promise<void> {
+  async completeJob(rowId: number, result: any, workerId: string = 'default'): Promise<void> {
+    const workerState = this.getWorkerState(workerId);
+
     if (rowId === -1) {
-      this.processing.delete(-1);
-      this.isInitialized = true;
-      this.state.workflowStep = 'Initialization Complete';
+      workerState.activeRowId = null;
+      workerState.isInitialized = true;
+      this.state.workflowStep = `Initialization Complete (${workerId})`;
       
       // If this was a re-initialization after NEW_THREAD, increment threadCounter
-      if (this.threadCounter > 0) {
-        this.threadCounter++; // Count the INIT prompt as part of the new thread
-        console.log(`INIT job completed (re-initialization). ThreadCounter incremented to ${this.threadCounter}`);
+      if (workerState.threadCounter > 0) {
+        workerState.threadCounter++; 
+        console.log(`[${workerId}] INIT job completed. ThreadCounter: ${workerState.threadCounter}`);
       } else {
-        console.log('INIT job completed (first time)');
+        console.log(`[${workerId}] INIT job completed (first time)`);
       }
       return;
     }
 
     if (rowId === -2) {
-      // NEW_THREAD job completed - button was clicked, page markdown IDs reset
-      this.processing.delete(-2);
+      // NEW_THREAD job completed
+      workerState.activeRowId = null;
       
-      // Reset markdown counter immediately because page just reset
-      this.markdownCounter = -1; // Will be 0 for INIT prompt
-      console.log(`NEW_THREAD button clicked. Markdown counter reset to -1`);
+      // Reset markdown counter
+      workerState.markdownCounter = -1; 
+      console.log(`[${workerId}] NEW_THREAD completed. Markdown counter reset.`);
       
-      // Now queue INIT job to re-initialize the new thread
-      // Don't increment threadCounter yet - that happens after INIT completes
-      this.isInitialized = false; // Force re-initialization
-      this.state.workflowStep = 'New Thread Created - Re-initializing';
-      console.log(`NEW_THREAD completed. Will send INIT prompt next with markdownCounter=0`);
+      // Force re-initialization
+      workerState.isInitialized = false; 
+      this.state.workflowStep = `New Thread Created (${workerId})`;
       return;
     }
 
-    if (this.processing.has(rowId)) {
-      this.processing.delete(rowId);
+    if (this.activeJobs.has(rowId)) {
+      this.activeJobs.delete(rowId);
+      workerState.activeRowId = null;
+      
       this.state.processed += 1;
       this.state.success += 1;
-      this.threadCounter += 1; // Increment thread counter for regular jobs
-      this.state.activeThreads = this.processing.size;
-      this.state.workflowStep = 'Job Completed';
+      workerState.threadCounter += 1;
       
-      // Reset no-markdown fail counter on success
-      this.noMarkdownFailCounter = 0;
-      console.log(`Job ${rowId} completed successfully. NoMarkdownFailCounter reset to 0`);
+      this.state.activeThreads = this.activeJobs.size;
+      this.state.workflowStep = `Job ${rowId} Completed`;
+      
+      // Reset no-markdown fail counter
+      workerState.noMarkdownFailCounter = 0;
       
       // Update Excel with result
       await this.excelService.writeRowResult(rowId, result);
 
-      console.log(`Job ${rowId} completed. ThreadCounter: ${this.threadCounter}`);
+      console.log(`[${workerId}] Job ${rowId} completed. ThreadCounter: ${workerState.threadCounter}`);
       
-      if (this.queue.length === 0 && this.processing.size === 0) {
+      if (this.queue.length === 0 && this.activeJobs.size === 0) {
         this.state.status = 'COMPLETED';
       }
     }
   }
 
-  async failJob(rowId: number, error: string): Promise<void> {
-    if (this.processing.has(rowId)) {
-      const job = this.processing.get(rowId)!;
-      this.processing.delete(rowId);
+  async failJob(rowId: number, error: string, workerId: string = 'default'): Promise<void> {
+    const workerState = this.getWorkerState(workerId);
+
+    if (this.activeJobs.has(rowId)) {
+      const job = this.activeJobs.get(rowId)!;
+      this.activeJobs.delete(rowId);
+      workerState.activeRowId = null;
       
-      console.log(`❌ Job ${rowId} failed with error: "${error}"`);
+      console.log(`[${workerId}] ❌ Job ${rowId} failed: "${error}"`);
       
-      // Check if error is timeout - trigger NEW_THREAD immediately
       const isTimeout = error.includes('timeout') || error.includes('Timeout');
       
       if (isTimeout) {
-        console.warn(`⏱️ TIMEOUT ERROR detected for job ${rowId}`);
-        console.warn(`🔄 Triggering NEW_THREAD immediately to recover`);
+        console.warn(`[${workerId}] ⏱️ TIMEOUT - Triggering NEW_THREAD`);
         
-        // Reset fail counter
-        this.noMarkdownFailCounter = 0;
-        
-        // Put job back to queue for retry after NEW_THREAD
+        workerState.noMarkdownFailCounter = 0;
         this.queue.unshift(job);
         
-        // Force NEW_THREAD by setting threadCounter to trigger threshold
-        this.threadCounter = this.THREAD_SIZE;
-        
-        console.log(`   Job ${rowId} re-queued. NEW_THREAD will be triggered on next poll.`);
+        // Force NEW_THREAD
+        workerState.threadCounter = this.THREAD_SIZE;
         return;
       }
       
-      // Check if error is "No code block found" - match exact error from content script
       const isNoMarkdownError = error.includes('No code block found') || 
                                  error.includes('no code block') ||
                                  error.includes('No code block');
       
-      console.log(`   Is no-markdown error? ${isNoMarkdownError}`);
-      
       if (isNoMarkdownError) {
-        this.noMarkdownFailCounter++;
-        console.log(`⚠️  No markdown error detected. FailCounter: ${this.noMarkdownFailCounter}/${this.MAX_NO_MARKDOWN_FAILS}`);
+        workerState.noMarkdownFailCounter++;
+        console.log(`[${workerId}] ⚠️ No markdown error. FailCounter: ${workerState.noMarkdownFailCounter}`);
         
-        if (this.noMarkdownFailCounter >= this.MAX_NO_MARKDOWN_FAILS) {
-          // Trigger NEW_THREAD after max consecutive failures
-          console.warn(`🔄 Max no-markdown failures reached (${this.MAX_NO_MARKDOWN_FAILS}). Triggering NEW_THREAD...`);
-          this.noMarkdownFailCounter = 0; // Reset counter
+        if (workerState.noMarkdownFailCounter >= this.MAX_NO_MARKDOWN_FAILS) {
+          console.warn(`[${workerId}] 🔄 Max failures. Triggering NEW_THREAD...`);
+          workerState.noMarkdownFailCounter = 0;
           
-          // Put job back to queue for retry after NEW_THREAD
           this.queue.unshift(job);
-          
-          // Force NEW_THREAD by setting threadCounter to trigger threshold
-          // This will make getNextJob return NEW_THREAD job
-          this.threadCounter = this.THREAD_SIZE; // Will trigger NEW_THREAD on next poll
-          
-          console.log(`   Job ${rowId} re-queued. NEW_THREAD will be triggered on next poll.`);
-          console.log(`   ThreadCounter set to ${this.THREAD_SIZE} to force NEW_THREAD`);
+          workerState.threadCounter = this.THREAD_SIZE;
         } else {
-          // Retry with reminder prompt
-          console.log(`🔁 Retrying job ${rowId} with reminder prompt (attempt ${this.noMarkdownFailCounter}/${this.MAX_NO_MARKDOWN_FAILS})`);
-          
-          // Put job back to front of queue with reminder
+          console.log(`[${workerId}] 🔁 Retrying with reminder...`);
           const retryJob: RowData = {
             ...job,
             inputData: job.inputData + '\n\n' + this.REMINDER_PROMPT
           };
           this.queue.unshift(retryJob);
-          
-          console.log(`   ✅ Job ${rowId} re-queued with reminder prompt`);
-          console.log(`   📝 Reminder appended: "${this.REMINDER_PROMPT.substring(0, 50)}..."`);
         }
       } else {
-        // Other errors - just mark as failed
-        console.error(`   ❌ Non-retry error for job ${rowId}: ${error}`);
+        console.error(`[${workerId}] ❌ Non-retry error for job ${rowId}`);
         await this.excelService.updateRowStatus(rowId, STATUS.ERROR_WHEN_PROCESS);
         this.state.failed += 1;
       }

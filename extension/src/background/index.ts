@@ -4,15 +4,33 @@ import { JobPayload } from 'shared/types';
 let isProcessing = false;
 let pollingIntervalId: number | null = null;
 const injectedTabs = new Set<number>(); // Track which tabs have content script
+let workerId: string = '';
+
+// Initialize worker ID
+async function initWorkerId() {
+  const result = await chrome.storage.local.get('workerId');
+  if (result.workerId) {
+    workerId = result.workerId;
+    console.log('Background: Loaded existing workerId:', workerId);
+  } else {
+    workerId = 'worker_' + Math.random().toString(36).substring(2, 15);
+    await chrome.storage.local.set({ workerId });
+    console.log('Background: Generated new workerId:', workerId);
+  }
+}
 
 // Start polling for jobs
-function startPolling() {
+async function startPolling() {
   if (pollingIntervalId) {
     console.log('Background: Polling already started');
     return;
   }
 
-  console.log('Background: Starting job polling...');
+  if (!workerId) {
+    await initWorkerId();
+  }
+
+  console.log('Background: Starting job polling with workerId:', workerId);
   
   pollingIntervalId = setInterval(pollForJobs, API_CONFIG.POLLING_INTERVAL) as unknown as number;
 }
@@ -26,7 +44,8 @@ async function pollForJobs() {
   }
 
   try {
-    const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.NEXT_JOB}`);
+    // Send workerId in query param
+    const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.NEXT_JOB}?workerId=${workerId}`);
     if (!response.ok) {
       console.error('Background: Failed to poll jobs:', response.statusText);
       return;
@@ -141,7 +160,8 @@ async function processJob(job: JobPayload) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         rowId: job.rowId,
-        result: response.result
+        result: response.result,
+        workerId // Send workerId
       })
     });
   } catch (error: any) {
@@ -176,7 +196,8 @@ async function processJob(job: JobPayload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rowId: job.rowId,
-          error: 'AI timeout after 15 minutes - NEW_THREAD will be triggered'
+          error: 'AI timeout after 15 minutes - NEW_THREAD will be triggered',
+          workerId // Send workerId
         })
       });
     } else {
@@ -186,7 +207,8 @@ async function processJob(job: JobPayload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rowId: job.rowId,
-          error: error.message || 'Unknown error'
+          error: error.message || 'Unknown error',
+          workerId // Send workerId
         })
       });
     }
@@ -220,6 +242,9 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
     });
   }
 });
+
+// Initialize workerId on load
+initWorkerId();
 
 console.log('Background: Ready (polling will start when user clicks Upload & Start)');
 
